@@ -1,71 +1,48 @@
 const std = @import("std");
 const Io = std.Io;
-
 const Proyecto_compu = @import("Proyecto_compu");
 
 pub fn main(init: std.process.Init) !void {
-    // Prints to stderr, unbuffered, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-
-    // This is appropriate for anything that lives as long as the process.
-    const arena: std.mem.Allocator = init.arena.allocator();
-
-    // Accessing command line arguments:
-    const args = try init.minimal.args.toSlice(arena);
-    for (args) |arg| {
-        std.log.info("arg: {s}", .{arg});
+    //Básicamente se carga primero el mapa del juego y se imprime en consola.
+    var mapa = try Mapa.load_map(init.io, init.gpa, "../resources/mapa.txt");
+    defer mapa.deinit(init.gpa);
+    for (mapa.cells) |linea| {
+        std.debug.print("{s}\n", .{linea});
     }
-
-    // In order to do I/O operations need an `Io` instance.
-    const io = init.io;
-
-    // Stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-    const stdout_writer = &stdout_file_writer.interface;
-
-    try Proyecto_compu.printAnotherMessage(stdout_writer);
-
-    try stdout_writer.flush(); // Don't forget to flush!
 }
 
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
+//struct para cargar el mapa del juego
+const Mapa = struct {
+    cells: [][]u8,
 
-test "fuzz example" {
-    try std.testing.fuzz({}, testOne, .{});
-}
+    fn load_map(io: std.Io, gpa: std.mem.Allocator, filename: []const u8) !Mapa {
+        var cwd = std.Io.Dir.cwd();
+        defer cwd.close(io);
 
-fn testOne(context: void, smith: *std.testing.Smith) !void {
-    _ = context;
-    // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
+        var fd = try cwd.openFile(io, filename, .{});
+        defer fd.close(io);
 
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(u8) = .empty;
-    defer list.deinit(gpa);
-    while (!smith.eos()) switch (smith.value(enum { add_data, dup_data })) {
-        .add_data => {
-            const slice = try list.addManyAsSlice(gpa, smith.value(u4));
-            smith.bytes(slice);
-        },
-        .dup_data => {
-            if (list.items.len == 0) continue;
-            if (list.items.len > std.math.maxInt(u32)) return error.SkipZigTest;
-            const len = smith.valueRangeAtMost(u32, 1, @min(32, list.items.len));
-            const off = smith.valueRangeAtMost(u32, 0, @intCast(list.items.len - len));
-            try list.appendSlice(gpa, list.items[off..][0..len]);
-            try std.testing.expectEqualSlices(
-                u8,
-                list.items[off..][0..len],
-                list.items[list.items.len - len ..],
-            );
-        },
-    };
-}
+        var buffer: [1024]u8 = undefined;
+        var file_reader = fd.reader(io, &buffer);
+        const reader = &file_reader.interface;
+
+        var out: std.ArrayList([]u8) = .empty;
+        while (reader.takeDelimiterInclusive('\n')) |datos| {
+            const espacio_copia = try gpa.alloc(u8, datos.len);
+            @memcpy(espacio_copia, datos);
+            try out.append(gpa, espacio_copia);
+        } else |err| switch (err) {
+            error.EndOfStream => {},
+            error.ReadFailed => return err,
+            error.StreamTooLong => return err,
+        }
+        return .{
+            .cells = out.items,
+        };
+    }
+    fn deinit(self: *Mapa, gpa: std.mem.Allocator) void {
+        for (self.cells) |linea| {
+            gpa.free(linea);
+        }
+    }
+};
