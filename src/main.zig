@@ -13,14 +13,6 @@ const width: i32 = 800;
 const height: i32 = 600;
 const block_sz: usize = 100;
 
-var player = playerI.Player{
-    .position = fr.Point{ .x = 150, .y = 150 },
-    .Angle = 0.0,
-    .FOV = std.math.pi / 3.0, // Campo de visión de 60 grados
-    .speed = 100.0,
-    .rotation_speed = std.math.pi / 2.0, // Velocidad de rotación de 90 grados por segundo
-};
-
 pub fn main(init: std.process.Init) !void {
     const gpa: std.mem.Allocator = switch (builtin.mode) {
         .Debug, .ReleaseSafe => alloc.Allocator(),
@@ -30,7 +22,13 @@ pub fn main(init: std.process.Init) !void {
         .Debug, .ReleaseSafe => gpa.deinit(),
         .ReleaseFast, .RealeaseSmall => {},
     };
-
+    var player = playerI.Player{
+        .position = fr.Point{ .x = 150, .y = 150 },
+        .Angle = 0.0,
+        .FOV = std.math.pi / 3.0, // Campo de visión de 60 grados
+        .speed = 100.0,
+        .rotation_speed = std.math.pi / 2.0, // Velocidad de rotación de 90 grados por segundo
+    };
     var threaded: std.Io.Threaded = .init(gpa, .{});
     const io = threaded.io();
     var framebuffer = fr.Framebuffer.init(width, height);
@@ -80,5 +78,33 @@ pub fn main(init: std.process.Init) !void {
             _ = ray.cast_ray(player, mapa, angle);
         }
         try fr.Framebuffer.swap_buffers();
+    }
+}
+
+pub fn render_3D(target: *fr.Framebuffer, map: Map.Mapa, player: playerI.Player) !void {
+    const ray_count: usize = @intCast(target.width);
+    const ray_count_f32: f32 = @floatFromInt(ray_count);
+    const half_screen_height: f32 = @as(f32, @floatFromInt(target.height)) / 2.0;
+
+    const intersect = try .ray.cast_ray(
+        target,
+        map,
+        player,
+        angle,
+        block_sz,
+        false,
+    );
+    const protection_plane: f32 = 70;
+    const draw_height: f32 = half_screen_height / intersect.Distance * protection_plane;
+
+    const bottom: usize = @intFromFloat(half_screen_height - draw_height / 2.0);
+    const top: usize = @intFromFloat(half_screen_height + draw_height / 2.0);
+    target.set_current_color(switch (intersect.Type) {
+        .Corner => .blue,
+        .Wall => .red,
+        .Green => .green,
+    });
+    for (bottom..top) |y| {
+        try target.set_pixel(@intCast(i), @intCast(y));
     }
 }
