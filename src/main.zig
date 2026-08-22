@@ -1,47 +1,84 @@
+//librerías y modulos utilizados
 const std = @import("std");
+const rl = @import("raylib");
+const ray = @import("logic_functions/ray_caster.zig");
+const Map = @import("logic_functions/map_loader.zig");
+const fr = @import("logic_functions/framebuffer.zig");
+const playerI = @import("player.zig");
+const builtin = @import("builtin");
+
+const Clock = std.Io.Clock.real;
+
+const width: i32 = 800;
+const height: i32 = 600;
+const block_sz: usize = 100;
+
+var player = playerI.Player{
+    .position = fr.Point{ .x = 150, .y = 150 },
+    .Angle = 0.0,
+    .FOV = std.math.pi / 3.0, // Campo de visión de 60 grados
+    .speed = 100.0,
+    .rotation_speed = std.math.pi / 2.0, // Velocidad de rotación de 90 grados por segundo
+};
 
 pub fn main(init: std.process.Init) !void {
+    const gpa: std.mem.Allocator = switch (builtin.mode) {
+        .Debug, .ReleaseSafe => alloc.Allocator(),
+        .ReleaseFast, .RealeaseSmall => {},
+    };
+    defer switch (builtin.mode) {
+        .Debug, .ReleaseSafe => gpa.deinit(),
+        .ReleaseFast, .RealeaseSmall => {},
+    };
+
+    var threaded: std.Io.Threaded = .init(gpa, .{});
+    const io = threaded.io();
+    var framebuffer = fr.Framebuffer.init(width, height);
+    rl.initWindow(width, height, "proyectoXD");
+    defer rl.closeWindow();
+    rl.setTargetFPS(60);
     //Básicamente se carga primero el mapa del juego y se imprime en consola.
-    var mapa = try Mapa.load_map(init.io, init.gpa, "src/resources/mapa.txt");
+    var mapa = try Map.Mapa.load_map(init.io, init.gpa, "src/resources/mapa.txt");
     defer mapa.deinit(init.gpa);
-    for (mapa.cells) |linea| {
-        std.debug.print("{s}", .{linea});
+
+    var framestart = Clock.now(io);
+    var dt: f32 = 1;
+
+    while (!rl.windowShouldClose()) {
+        defer {
+            const now = Clock.now(io);
+            const dt_ms = @floatFromInt(framestart.durationTo(now).toMilliseconds());
+            dt = dt_ms / 1000.0;
+            framestart = now;
+        }
+        fr.Framebuffer.clear();
+
+        if (rl.isKeyDown(.a)) {
+            player.Angle -= player.rotarion_speed * dt;
+        }
+        if (rl.isKeyDown(.d)) {
+            player.Angle += player.rotarion_speed * dt;
+        }
+        if (rl.isKeyDown(.w)) {
+            player.position.x += @cos(player.Angle) * player.speed * dt;
+            player.position.y += @sin(player.Angle) * player.speed * dt;
+        }
+        if (rl.isKeyDown(.s)) {
+            player.position.y -= @sin(player.Angle) * 5 * dt;
+            player.position.x -= @cos(player.Angle) * 5 * dt;
+        }
+
+        Map.render(&rl.getFramebuffer(), block_sz);
+        playerI.Angle += std.math.pi / 60.0; // Incrementa el ángulo del jugador en 1 grado por frame
+        const ray_num = 5;
+        const ray_count_f32: f32 = ray_num;
+
+        for (0..ray_num) |i| {
+            const i_f32: f32 = @floatFromInt(i);
+            const offset: f32 = player.Angle * i_f32 / ray_count_f32;
+            const angle: f32 = player.Angle - playerI.FOV / 2.0 + offset;
+            _ = ray.cast_ray(player, mapa, angle);
+        }
+        try fr.Framebuffer.swap_buffers();
     }
 }
-
-//struct para cargar el mapa del juego
-const Mapa = struct {
-    cells: [][]u8,
-
-    fn load_map(io: std.Io, gpa: std.mem.Allocator, filename: []const u8) !Mapa {
-        var cwd = std.Io.Dir.cwd();
-        defer cwd.close(io);
-
-        var fd = try cwd.openFile(io, filename, .{});
-        defer fd.close(io);
-
-        var buffer: [1024]u8 = undefined;
-        var file_reader = fd.reader(io, &buffer);
-        const reader = &file_reader.interface;
-
-        var out: std.ArrayList([]u8) = .empty;
-
-        errdefer out.deinit(gpa); // por si algo falla a medio camino
-        while (reader.takeDelimiterInclusive('\n')) |datos| {
-            const espacio_copia = try gpa.alloc(u8, datos.len);
-            @memcpy(espacio_copia, datos);
-            try out.append(gpa, espacio_copia);
-        } else |err| switch (err) {
-            error.EndOfStream => {},
-            error.ReadFailed => return err,
-            error.StreamTooLong => return err,
-        }
-        return .{ .cells = try out.toOwnedSlice(gpa) };
-    }
-    fn deinit(self: *Mapa, gpa: std.mem.Allocator) void {
-        for (self.cells) |linea| {
-            gpa.free(linea);
-        }
-        gpa.free(self.cells);
-    }
-};
