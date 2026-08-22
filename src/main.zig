@@ -1,13 +1,11 @@
 const std = @import("std");
-const Io = std.Io;
-const Proyecto_compu = @import("Proyecto_compu");
 
 pub fn main(init: std.process.Init) !void {
     //Básicamente se carga primero el mapa del juego y se imprime en consola.
-    var mapa = try Mapa.load_map(init.io, init.gpa, "../resources/mapa.txt");
+    var mapa = try Mapa.load_map(init.io, init.gpa, "src/resources/mapa.txt");
     defer mapa.deinit(init.gpa);
     for (mapa.cells) |linea| {
-        std.debug.print("{s}\n", .{linea});
+        std.debug.print("{s}", .{linea});
     }
 }
 
@@ -27,6 +25,8 @@ const Mapa = struct {
         const reader = &file_reader.interface;
 
         var out: std.ArrayList([]u8) = .empty;
+
+        errdefer out.deinit(gpa); // por si algo falla a medio camino
         while (reader.takeDelimiterInclusive('\n')) |datos| {
             const espacio_copia = try gpa.alloc(u8, datos.len);
             @memcpy(espacio_copia, datos);
@@ -36,13 +36,12 @@ const Mapa = struct {
             error.ReadFailed => return err,
             error.StreamTooLong => return err,
         }
-        return .{
-            .cells = out.items,
-        };
+        return .{ .cells = try out.toOwnedSlice(gpa) };
     }
     fn deinit(self: *Mapa, gpa: std.mem.Allocator) void {
         for (self.cells) |linea| {
             gpa.free(linea);
         }
+        gpa.free(self.cells);
     }
 };
