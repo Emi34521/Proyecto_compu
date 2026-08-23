@@ -6,6 +6,7 @@ pub const Framebuffer = struct {
     image: rl.Image,
     texture: ?rl.Texture,
     background_color: rl.Color,
+    current_color: rl.Color,
 
     pub fn init(width: i32, height: i32, color: rl.Color) Framebuffer {
         return Framebuffer{
@@ -13,6 +14,7 @@ pub const Framebuffer = struct {
             .height = height,
             .image = rl.genImageColor(width, height, color),
             .background_color = color,
+            .current_color = color,
             .texture = null,
         };
     }
@@ -25,8 +27,8 @@ pub const Framebuffer = struct {
         const i32_x: i32 = @intFromFloat(x);
         const i32_y: i32 = @intFromFloat(y);
 
-        if (i32_x > self.width) return error.BadCoordinates;
-        if (i32_y > self.height) return error.BadCoordinates;
+        if (i32_x >= self.width) return error.BadCoordinates;
+        if (i32_y >= self.height) return error.BadCoordinates;
 
         if (i32_x < 0) return error.BadCoordinates;
         if (i32_y < 0) return error.BadCoordinates;
@@ -39,19 +41,18 @@ pub const Framebuffer = struct {
         // Si no ponemos esto, se muere la compu. Pruebenlo, pero ahí le dan ctrl+c
         if (self.texture) |texture| {
             rl.unloadTexture(texture);
+            self.texture = null;
         }
     }
+
+    // Cambia el color con el que se dibuja (paredes, sprites, etc.),
+    // separado del background_color para que clear() no lo herede por error.
     pub fn set_current_color(self: *Framebuffer, color: rl.Color) void {
-        self.background_color = color;
+        self.current_color = color;
     }
-    pub fn renderToFile(self: *Framebuffer, filename: []const u8) !void {
-        if (!self.color_buff.exportToFile(@ptrCast(filename))) return error.CouldntWriteFile;
-    }
-    pub fn swap_buffers(self: *Framebuffer) !void {
-        rl.beginDrawing();
-        defer rl.endDrawing();
-        const texture = try rl.loadTextureFromImage(self:color_buff);
-        rl.drawTexture(texture, 0, 0, .white);
+
+    pub fn renderToFile(self: *Framebuffer, filename: [:0]const u8) !void {
+        if (!self.image.exportToFile(filename)) return error.CouldntWriteFile;
     }
 
     pub fn swap(self: *Framebuffer) !void {

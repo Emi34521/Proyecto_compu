@@ -4,107 +4,145 @@ const rl = @import("raylib");
 const ray = @import("logic_functions/ray_caster.zig");
 const Map = @import("logic_functions/map_loader.zig");
 const fr = @import("logic_functions/framebuffer.zig");
-const playerI = @import("player.zig");
-const builtin = @import("builtin");
+const playerI = @import("logic_functions/player.zig");
+const artist = @import("logic_functions/artist.zig");
 
 const Clock = std.Io.Clock.real;
 
-const width: i32 = 800;
-const height: i32 = 600;
+const width: i32 = 1200;
+const height: i32 = 900;
 const block_sz: usize = 100;
 
+const ViewMode = enum { first_person, top_down };
+
 pub fn main(init: std.process.Init) !void {
-    const gpa: std.mem.Allocator = switch (builtin.mode) {
-        .Debug, .ReleaseSafe => alloc.Allocator(),
-        .ReleaseFast, .RealeaseSmall => {},
-    };
-    defer switch (builtin.mode) {
-        .Debug, .ReleaseSafe => gpa.deinit(),
-        .ReleaseFast, .RealeaseSmall => {},
-    };
+    // std.process.Init ya nos da un allocator y un io listos para usar,
+    // no hace falta armar uno manualmente.
+    const gpa = init.gpa;
+    const io = init.io;
+
     var player = playerI.Player{
-        .position = fr.Point{ .x = 150, .y = 150 },
+        .position = rl.Vector2{ .x = 150, .y = 150 },
         .Angle = 0.0,
         .FOV = std.math.pi / 3.0, // Campo de visión de 60 grados
-        .speed = 100.0,
+        .speed = 350.0,
         .rotation_speed = std.math.pi / 2.0, // Velocidad de rotación de 90 grados por segundo
     };
-    var threaded: std.Io.Threaded = .init(gpa, .{});
-    const io = threaded.io();
-    var framebuffer = fr.Framebuffer.init(width, height);
+
+    var framebuffer = fr.Framebuffer.init(width, height, .black);
     rl.initWindow(width, height, "proyectoXD");
     defer rl.closeWindow();
     rl.setTargetFPS(60);
+
     //Básicamente se carga primero el mapa del juego y se imprime en consola.
-    var mapa = try Map.Mapa.load_map(init.io, init.gpa, "src/resources/mapa.txt");
-    defer mapa.deinit(init.gpa);
+    var mapa = try Map.Mapa.load_map(io, gpa, "src/resources/mapa.txt");
+    defer mapa.deinit(gpa);
 
     var framestart = Clock.now(io);
     var dt: f32 = 1;
 
+    const width_f32: f32 = @floatFromInt(width);
+    const height_f32: f32 = @floatFromInt(height);
+    const block_sz_f32: f32 = @floatFromInt(block_sz);
+    const num_rays: usize = @intCast(width); // un rayo por columna de pantalla
+
+    var view_mode: ViewMode = .first_person;
+
     while (!rl.windowShouldClose()) {
         defer {
             const now = Clock.now(io);
-            const dt_ms = @floatFromInt(framestart.durationTo(now).toMilliseconds());
+            const dt_ms: f32 = @floatFromInt(framestart.durationTo(now).toMilliseconds());
             dt = dt_ms / 1000.0;
             framestart = now;
         }
-        fr.Framebuffer.clear();
+        framebuffer.clear();
 
+        // --- controles ---
         if (rl.isKeyDown(.a)) {
-            player.Angle -= player.rotarion_speed * dt;
+            player.Angle -= player.rotation_speed * dt;
         }
         if (rl.isKeyDown(.d)) {
-            player.Angle += player.rotarion_speed * dt;
+            player.Angle += player.rotation_speed * dt;
         }
         if (rl.isKeyDown(.w)) {
             player.position.x += @cos(player.Angle) * player.speed * dt;
             player.position.y += @sin(player.Angle) * player.speed * dt;
         }
         if (rl.isKeyDown(.s)) {
-            player.position.y -= @sin(player.Angle) * 5 * dt;
-            player.position.x -= @cos(player.Angle) * 5 * dt;
+            player.position.x -= @cos(player.Angle) * player.speed * dt;
+            player.position.y -= @sin(player.Angle) * player.speed * dt;
         }
 
-        Map.render(&rl.getFramebuffer(), block_sz);
-        playerI.Angle += std.math.pi / 60.0; // Incrementa el ángulo del jugador en 1 grado por frame
-        const ray_num = 5;
-        const ray_count_f32: f32 = ray_num;
-
-        for (0..ray_num) |i| {
-            const i_f32: f32 = @floatFromInt(i);
-            const offset: f32 = player.Angle * i_f32 / ray_count_f32;
-            const angle: f32 = player.Angle - playerI.FOV / 2.0 + offset;
-            _ = ray.cast_ray(player, mapa, angle);
+        // isKeyPressed (no isKeyDown) para que cambie de vista UNA vez por
+        // pulsación, no 60 veces por segundo mientras la tecla está abajo.
+        if (rl.isKeyPressed(.k)) {
+            view_mode = switch (view_mode) {
+                .first_person => .top_down,
+                .top_down => .first_person,
+            };
         }
-        try fr.Framebuffer.swap_buffers();
-    }
-}
 
-pub fn render_3D(target: *fr.Framebuffer, map: Map.Mapa, player: playerI.Player) !void {
-    const ray_count: usize = @intCast(target.width);
-    const ray_count_f32: f32 = @floatFromInt(ray_count);
-    const half_screen_height: f32 = @as(f32, @floatFromInt(target.height)) / 2.0;
+        switch (view_mode) {
+            .first_person => {
+                // --- raycasting: un rayo por columna de pantalla ---
+                const num_rays_f32: f32 = @floatFromInt(num_rays);
+                for (0..num_rays) |col| {
+                    const col_f32: f32 = @floatFromInt(col);
+                    const ray_angle = player.Angle - player.FOV / 2.0 + player.FOV * (col_f32 / num_rays_f32);
 
-    const intersect = try .ray.cast_ray(
-        target,
-        map,
-        player,
-        angle,
-        block_sz,
-        false,
-    );
-    const protection_plane: f32 = 70;
-    const draw_height: f32 = half_screen_height / intersect.Distance * protection_plane;
+                    const hit = ray.cast_ray(player, mapa, ray_angle);
 
-    const bottom: usize = @intFromFloat(half_screen_height - draw_height / 2.0);
-    const top: usize = @intFromFloat(half_screen_height + draw_height / 2.0);
-    target.set_current_color(switch (intersect.Type) {
-        .Corner => .blue,
-        .Wall => .red,
-        .Green => .green,
-    });
-    for (bottom..top) |y| {
-        try target.set_pixel(@intCast(i), @intCast(y));
+                    // corrige el efecto "ojo de pez" proyectando la distancia sobre el eje de la cámara
+                    const corrected_distance = hit.distancia * @cos(ray_angle - player.Angle);
+                    const wall_height = if (corrected_distance > 1)
+                        (block_sz_f32 * height_f32) / corrected_distance
+                    else
+                        height_f32;
+
+                    const wall_top: usize = @intFromFloat(@max(0.0, (height_f32 - wall_height) / 2.0));
+                    const wall_bottom: usize = @intFromFloat(@min(height_f32, (height_f32 + wall_height) / 2.0));
+
+                    const color: rl.Color = switch (hit.tipo_pared) {
+                        '+' => .blue,
+                        '-' => .red,
+                        '|' => .blue,
+                        ' ' => continue, // no se encontró pared en el rango: dejamos el fondo tal cual
+                        else => .gray, // símbolo de mapa no reconocido (nos avisa de un bug en el mapa)
+                    };
+
+                    for (wall_top..wall_bottom) |y| {
+                        framebuffer.draw_pixel(col_f32, @floatFromInt(y), color) catch continue;
+                    }
+                }
+            },
+            .top_down => {
+                // calculamos cuántas columnas/filas tiene el mapa (la fila
+                // más larga manda, por si alguna línea del .txt es más corta)
+                var map_cols: usize = 0;
+                for (mapa.cells) |row| {
+                    if (row.len > map_cols) map_cols = row.len;
+                }
+                const map_rows_f32: f32 = @floatFromInt(mapa.cells.len);
+                const map_cols_f32: f32 = @floatFromInt(map_cols);
+
+                // tamaño de celda para esta vista, para que el mapa ENTERO
+                // quepa en la pantalla (no el block_sz real del juego)
+                const cell_px_f32 = @min(width_f32 / map_cols_f32, height_f32 / map_rows_f32);
+                const cell_px: usize = @intFromFloat(@max(1.0, cell_px_f32));
+
+                Map.Mapa.render(mapa, &framebuffer, cell_px);
+
+                // punto del jugador, escalado igual que el mapa: convertimos
+                // su posición real (en unidades de block_sz) a la escala del minimapa
+                const scale = cell_px_f32 / block_sz_f32;
+                const marker_x: i32 = @intFromFloat(player.position.x * scale);
+                const marker_y: i32 = @intFromFloat(player.position.y * scale);
+
+                framebuffer.set_current_color(.yellow);
+                artist.square(&framebuffer, marker_x - 3, marker_y - 3, 6, 6);
+            },
+        }
+
+        try framebuffer.swap();
     }
 }

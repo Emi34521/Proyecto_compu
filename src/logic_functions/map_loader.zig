@@ -1,5 +1,5 @@
 const std = @import("std");
-const fr = @import("logic_functions/framebuffer.zig");
+const fr = @import("framebuffer.zig");
 const artist = @import("artist.zig");
 const rl = @import("raylib");
 
@@ -22,8 +22,13 @@ pub const Mapa = struct {
 
         errdefer out.deinit(gpa); // por si algo falla a medio camino
         while (reader.takeDelimiterInclusive('\n')) |datos| {
-            const espacio_copia = try gpa.alloc(u8, datos.len);
-            @memcpy(espacio_copia, datos);
+            // quitamos \r y \n del final, si no cada fila queda con una
+            // "pared fantasma" invisible al final por esos caracteres
+            const linea_limpia = std.mem.trimEnd(u8, datos, "\r\n");
+            if (linea_limpia.len == 0) continue; // ignora líneas vacías
+
+            const espacio_copia = try gpa.alloc(u8, linea_limpia.len);
+            @memcpy(espacio_copia, linea_limpia);
             try out.append(gpa, espacio_copia);
         } else |err| switch (err) {
             error.EndOfStream => {},
@@ -45,12 +50,13 @@ pub const Mapa = struct {
                 const y = row_idx * block_sz;
 
                 switch (cell) {
-                    '+' => target.set_current_color(rl.blue),
-                    '-' => target.set_current_color(rl.red),
-                    '|' => target.set_current_color(rl.blue),
+                    '+' => target.set_current_color(rl.Color.blue),
+                    '-' => target.set_current_color(rl.Color.red),
+                    '|' => target.set_current_color(rl.Color.blue),
                     ' ' => continue,
                     else => {
-                        std.log.err("Map cells not supported", .{cell});
+                        std.log.err("Celda de mapa no soportada: {c}", .{cell});
+                        continue;
                     },
                 }
                 artist.square(target, @intCast(x), @intCast(y), block_sz, block_sz);
