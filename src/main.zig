@@ -47,6 +47,7 @@ pub fn main(init: std.process.Init) !void {
     const num_rays: usize = @intCast(width); // un rayo por columna de pantalla
 
     var view_mode: ViewMode = .first_person;
+    var corrected_distance: f32 = undefined;
 
     while (!rl.windowShouldClose()) {
         defer {
@@ -57,18 +58,31 @@ pub fn main(init: std.process.Init) !void {
         }
         framebuffer.clear();
 
-        // --- controles ---
+        // Controles
         if (rl.isKeyDown(.a)) {
             player.Angle -= player.rotation_speed * dt;
         }
         if (rl.isKeyDown(.d)) {
             player.Angle += player.rotation_speed * dt;
         }
-        if (rl.isKeyDown(.w)) {
+
+        //Sección graciosa, esta es la parte de "colisiones" se utiliza la función de "isWall" para indicar que el jugador
+        //se puede mover únicamente si no está "dentro" o al menos cerca de una pared. No obstante, cuenta con un "bug" que es,
+        // hasta cierto punto, intencional. Al no incluir el tercer if de esta parte, si el jugador se acerca demasiado a una pared,
+        // este se quedaría atascado hasta reiniciar el juego. Por este motivo, el último if intenta solucionar esto, siguiendo la lógica
+        // de que si se llega a topar por completo con una pared, el jugador retrocederá un poco para continuar con su movilidad normal.
+        // Aquí aparece el "bug" el jugador puede atravezar paredes si camina hacía atrás. Lo dejaré como algo curioso y para futuras
+        //pruebas resultará útil y me ahorrará tiempo. Además que me permitirá añadir "easter eggs" dentro del juego.
+
+        if ((rl.isKeyDown(.w)) and !(mapa.isWall(player.position.x, player.position.y, block_sz))) {
             player.position.x += @cos(player.Angle) * player.speed * dt;
             player.position.y += @sin(player.Angle) * player.speed * dt;
         }
-        if (rl.isKeyDown(.s)) {
+        if ((rl.isKeyDown(.s)) and !(mapa.isWall(player.position.x, player.position.y, block_sz))) {
+            player.position.x -= @cos(player.Angle) * player.speed * dt;
+            player.position.y -= @sin(player.Angle) * player.speed * dt;
+        }
+        if (mapa.isWall(player.position.x, player.position.y, block_sz)) {
             player.position.x -= @cos(player.Angle) * player.speed * dt;
             player.position.y -= @sin(player.Angle) * player.speed * dt;
         }
@@ -93,7 +107,7 @@ pub fn main(init: std.process.Init) !void {
                     const hit = ray.cast_ray(player, mapa, ray_angle);
 
                     // corrige el efecto "ojo de pez" proyectando la distancia sobre el eje de la cámara
-                    const corrected_distance = hit.distancia * @cos(ray_angle - player.Angle);
+                    corrected_distance = hit.distancia * @cos(ray_angle - player.Angle);
                     const wall_height = if (corrected_distance > 1)
                         (block_sz_f32 * height_f32) / corrected_distance
                     else

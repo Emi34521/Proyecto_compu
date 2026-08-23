@@ -63,4 +63,12 @@ pub const Mapa = struct {
             }
         }
     }
+    //función que indica que algo es una pared o no. Retorna un bool
+    pub fn isWall(self: Mapa, x: f32, y: f32, block_sz: f32) bool {
+        if (x < 0 or y < 0) return true;
+        const i: usize = @intFromFloat(x / block_sz);
+        const j: usize = @intFromFloat(y / block_sz);
+        if (j >= self.cells.len or i >= self.cells[j].len) return true;
+        return self.cells[j][i] != ' ';
+    }
 };
