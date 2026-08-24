@@ -9,7 +9,7 @@ pub const Mapa = struct {
 
     pub fn load_map(io: std.Io, gpa: std.mem.Allocator, filename: []const u8) !Mapa {
         var cwd = std.Io.Dir.cwd();
-        defer cwd.close(io);
+        //defer cwd.close(io); para gargar las texturas del mapa, es mucho mejor comentar esto.
 
         var fd = try cwd.openFile(io, filename, .{});
         defer fd.close(io);
