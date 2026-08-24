@@ -9,8 +9,8 @@ const artist = @import("logic_functions/artist.zig");
 
 const Clock = std.Io.Clock.real;
 
-const width: i32 = 1200;
-const height: i32 = 900;
+const width: i32 = 1900;
+const height: i32 = 1070;
 const block_sz: usize = 100;
 
 const ViewMode = enum { first_person, top_down };
@@ -47,7 +47,17 @@ pub fn main(init: std.process.Init) !void {
     const num_rays: usize = @intCast(width); // un rayo por columna de pantalla
 
     var view_mode: ViewMode = .first_person;
-    var corrected_distance: f32 = undefined;
+
+    //espacio para las texturas de las paredes.
+    var wall_textures = [_]rl.Image{
+        try rl.loadImage("src/resources/wall1.png"),
+        try rl.loadImage("src/resources/wall2.png"),
+        try rl.loadImage("src/resources/wall3.png"),
+    };
+    //liberar la memoria
+    defer for (wall_textures) |img| rl.unloadImage(img);
+
+    for (&wall_textures) |*img| rl.imageFormat(img, .uncompressed_r8g8b8a8);
 
     while (!rl.windowShouldClose()) {
         defer {
@@ -65,7 +75,6 @@ pub fn main(init: std.process.Init) !void {
         if (rl.isKeyDown(.d)) {
             player.Angle += player.rotation_speed * dt;
         }
-
         //Sección graciosa, esta es la parte de "colisiones" se utiliza la función de "isWall" para indicar que el jugador
         //se puede mover únicamente si no está "dentro" o al menos cerca de una pared. No obstante, cuenta con un "bug" que es,
         // hasta cierto punto, intencional. Al no incluir el tercer if de esta parte, si el jugador se acerca demasiado a una pared,
@@ -98,16 +107,14 @@ pub fn main(init: std.process.Init) !void {
 
         switch (view_mode) {
             .first_person => {
-                // --- raycasting: un rayo por columna de pantalla ---
+                // raycasting: un rayo por columna de pantalla
                 const num_rays_f32: f32 = @floatFromInt(num_rays);
                 for (0..num_rays) |col| {
                     const col_f32: f32 = @floatFromInt(col);
                     const ray_angle = player.Angle - player.FOV / 2.0 + player.FOV * (col_f32 / num_rays_f32);
 
                     const hit = ray.cast_ray(player, mapa, ray_angle);
-
-                    // corrige el efecto "ojo de pez" proyectando la distancia sobre el eje de la cámara
-                    corrected_distance = hit.distancia * @cos(ray_angle - player.Angle);
+                    const corrected_distance = hit.distancia * @cos(ray_angle - player.Angle);
                     const wall_height = if (corrected_distance > 1)
                         (block_sz_f32 * height_f32) / corrected_distance
                     else
@@ -116,15 +123,33 @@ pub fn main(init: std.process.Init) !void {
                     const wall_top: usize = @intFromFloat(@max(0.0, (height_f32 - wall_height) / 2.0));
                     const wall_bottom: usize = @intFromFloat(@min(height_f32, (height_f32 + wall_height) / 2.0));
 
-                    const color: rl.Color = switch (hit.tipo_pared) {
-                        '+' => .blue,
-                        '-' => .red,
-                        '|' => .blue,
-                        ' ' => continue, // no se encontró pared en el rango: dejamos el fondo tal cual
-                        else => .gray, // símbolo de mapa no reconocido (nos avisa de un bug en el mapa)
-                    };
+                    if (hit.tipo_pared == ' ') continue;
+
+                    const textura = wall_textures[textureIndexFor(hit.tipo_pared)];
+                    const tex_width: usize = @intCast(textura.width);
+                    const tex_height: usize = @intCast(textura.height);
+
+                    var datos_textura: []u8 = undefined;
+                    datos_textura.ptr = @ptrCast(textura.data);
+                    datos_textura.len = tex_width * tex_height * 4; // RGBA = 4 bytes/pixel
+
+                    const on_screen_height = wall_bottom - wall_top;
+                    const x_pixel: usize = @min(
+                        tex_width - 1,
+                        @as(usize, @intFromFloat(hit.img_offset * @as(f32, @floatFromInt(tex_width)))),
+                    );
 
                     for (wall_top..wall_bottom) |y| {
+                        const y_scaled = @min(tex_height - 1, ((y - wall_top) * tex_height) / on_screen_height);
+                        const text_idx = (y_scaled * tex_width + x_pixel) * 4;
+
+                        const color = rl.Color{
+                            .r = datos_textura[text_idx],
+                            .g = datos_textura[text_idx + 1],
+                            .b = datos_textura[text_idx + 2],
+                            .a = datos_textura[text_idx + 3],
+                        };
+
                         framebuffer.draw_pixel(col_f32, @floatFromInt(y), color) catch continue;
                     }
                 }
@@ -159,4 +184,12 @@ pub fn main(init: std.process.Init) !void {
 
         try framebuffer.swap();
     }
+}
+fn textureIndexFor(wall_char: u8) usize {
+    return switch (wall_char) {
+        '-' => 0,
+        '|' => 1,
+        '+' => 2,
+        else => 0,
+    };
 }
