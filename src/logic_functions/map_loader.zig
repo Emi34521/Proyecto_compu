@@ -53,6 +53,7 @@ pub const Mapa = struct {
                     '+' => target.set_current_color(rl.Color.blue),
                     '-' => target.set_current_color(rl.Color.red),
                     '|' => target.set_current_color(rl.Color.blue),
+                    '0', '*' => target.set_current_color(rl.Color.dark_gray), // sección inaccesible/rubble
                     ' ' => continue,
                     else => {
                         std.log.err("Celda de mapa no soportada: {c}", .{cell});
@@ -70,5 +71,33 @@ pub const Mapa = struct {
         const j: usize = @intFromFloat(y / block_sz);
         if (j >= self.cells.len or i >= self.cells[j].len) return true;
         return self.cells[j][i] != ' ';
+    }
+
+    // Busca todas las celdas que tengan `symbol` (ej. 'x' para spawns de
+    // enemigos), regresa su posición en el mundo (centrada en la celda), y
+    // las deja como piso (' ') para que dejen de contar como pared en
+    // isWall/cast_ray/render. Se llama UNA vez, justo después de cargar el mapa.
+    pub fn extract_spawns(self: *Mapa, gpa: std.mem.Allocator, symbol: u8, block_sz: usize) ![]rl.Vector2 {
+        var out: std.ArrayList(rl.Vector2) = .empty;
+        errdefer out.deinit(gpa);
+
+        const block_sz_f32: f32 = @floatFromInt(block_sz);
+
+        for (self.cells, 0..) |row, row_idx| {
+            for (row, 0..) |cell, col_idx| {
+                if (cell != symbol) continue;
+
+                const col_f32: f32 = @floatFromInt(col_idx);
+                const row_f32: f32 = @floatFromInt(row_idx);
+
+                try out.append(gpa, .{
+                    .x = col_f32 * block_sz_f32 + block_sz_f32 / 2.0,
+                    .y = row_f32 * block_sz_f32 + block_sz_f32 / 2.0,
+                });
+
+                self.cells[row_idx][col_idx] = ' '; // ya no es pared
+            }
+        }
+        return out.toOwnedSlice(gpa);
     }
 };

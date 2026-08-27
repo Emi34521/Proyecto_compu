@@ -6,6 +6,7 @@ const Map = @import("logic_functions/map_loader.zig");
 const fr = @import("logic_functions/framebuffer.zig");
 const playerI = @import("logic_functions/player.zig");
 const artist = @import("logic_functions/artist.zig");
+const spriteT = @import("logic_functions/sprite.zig");
 
 const Clock = std.Io.Clock.real;
 
@@ -38,6 +39,21 @@ pub fn main(init: std.process.Init) !void {
     var mapa = try Map.Mapa.load_map(io, gpa, "src/resources/mapa.txt");
     defer mapa.deinit(gpa);
 
+    // sacamos las posiciones de las 'x' del mapa (spawns de mecha) y las
+    // convertimos en sprites reales; extract_spawns ya deja esas celdas
+    // como piso (' ') para que no cuenten como pared
+    const mecha_positions = try mapa.extract_spawns(gpa, 'x', block_sz);
+    defer gpa.free(mecha_positions);
+
+    var sprites = try gpa.alloc(spriteT.Sprite, mecha_positions.len);
+    defer {
+        for (sprites) |s| s.deinit();
+        gpa.free(sprites);
+    }
+    for (mecha_positions, 0..) |pos, idx| {
+        sprites[idx] = try spriteT.Sprite.init("src/resources/sprites/mecha.png", pos, 80);
+    }
+
     var framestart = Clock.now(io);
     var dt: f32 = 1;
 
@@ -48,11 +64,20 @@ pub fn main(init: std.process.Init) !void {
 
     var view_mode: ViewMode = .first_person;
 
+    const texture_size: usize = 64;
+
+    // Arena para las asignaciones de cada frame (sprite_hits, hit_sprites
+    // dentro de cast_ray). Se resetea entero cada frame en vez de liberar
+    // cada asignación suelta, que sería mucho más lento con 800+ rayos/frame.
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+
     //espacio para las texturas de las paredes.
     var wall_textures = [_]rl.Image{
-        try rl.loadImage("src/resources/wall1.png"),
-        try rl.loadImage("src/resources/wall2.png"),
-        try rl.loadImage("src/resources/wall3.png"),
+        try rl.loadImage("src/resources/textures/wall1.png"),
+        try rl.loadImage("src/resources/textures/wall2.png"),
+        try rl.loadImage("src/resources/textures/wall3.png"),
+        try rl.loadImage("src/resources/textures/wall4.png"), // '0' y '*': secciones inaccesibles
     };
     //liberar la memoria
     defer for (wall_textures) |img| rl.unloadImage(img);
@@ -67,6 +92,11 @@ pub fn main(init: std.process.Init) !void {
             framestart = now;
         }
         framebuffer.clear();
+
+        // reseteamos la arena al inicio de cada frame: libera de un jalón
+        // todo lo que cast_ray fue pidiendo durante el frame anterior
+        _ = arena_state.reset(.retain_capacity);
+        const arena = arena_state.allocator();
 
         // Controles
         if (rl.isKeyDown(.a)) {
@@ -113,7 +143,7 @@ pub fn main(init: std.process.Init) !void {
                     const col_f32: f32 = @floatFromInt(col);
                     const ray_angle = player.Angle - player.FOV / 2.0 + player.FOV * (col_f32 / num_rays_f32);
 
-                    const hit = ray.cast_ray(player, mapa, ray_angle);
+                    const hit = try ray.cast_ray(arena, mapa, player, ray_angle, texture_size, block_sz, sprites);
                     const corrected_distance = hit.distancia * @cos(ray_angle - player.Angle);
                     const wall_height = if (corrected_distance > 1)
                         (block_sz_f32 * height_f32) / corrected_distance
@@ -123,34 +153,89 @@ pub fn main(init: std.process.Init) !void {
                     const wall_top: usize = @intFromFloat(@max(0.0, (height_f32 - wall_height) / 2.0));
                     const wall_bottom: usize = @intFromFloat(@min(height_f32, (height_f32 + wall_height) / 2.0));
 
-                    if (hit.tipo_pared == ' ') continue;
+                    if (hit.tipo_pared != ' ') {
+                        const textura = wall_textures[textureIndexFor(hit.tipo_pared)];
+                        const tex_width: usize = @intCast(textura.width);
+                        const tex_height: usize = @intCast(textura.height);
 
-                    const textura = wall_textures[textureIndexFor(hit.tipo_pared)];
-                    const tex_width: usize = @intCast(textura.width);
-                    const tex_height: usize = @intCast(textura.height);
+                        var datos_textura: []u8 = undefined;
+                        datos_textura.ptr = @ptrCast(textura.data);
+                        datos_textura.len = tex_width * tex_height * 4; // RGBA = 4 bytes/pixel
 
-                    var datos_textura: []u8 = undefined;
-                    datos_textura.ptr = @ptrCast(textura.data);
-                    datos_textura.len = tex_width * tex_height * 4; // RGBA = 4 bytes/pixel
+                        const on_screen_height = wall_bottom - wall_top;
+                        const x_pixel: usize = @min(
+                            tex_width - 1,
+                            @as(usize, @intFromFloat(hit.img_offset * @as(f32, @floatFromInt(tex_width)))),
+                        );
 
-                    const on_screen_height = wall_bottom - wall_top;
-                    const x_pixel: usize = @min(
-                        tex_width - 1,
-                        @as(usize, @intFromFloat(hit.img_offset * @as(f32, @floatFromInt(tex_width)))),
-                    );
+                        for (wall_top..wall_bottom) |y| {
+                            const y_scaled = @min(tex_height - 1, ((y - wall_top) * tex_height) / on_screen_height);
+                            const text_idx = (y_scaled * tex_width + x_pixel) * 4;
 
-                    for (wall_top..wall_bottom) |y| {
-                        const y_scaled = @min(tex_height - 1, ((y - wall_top) * tex_height) / on_screen_height);
-                        const text_idx = (y_scaled * tex_width + x_pixel) * 4;
+                            const color = rl.Color{
+                                .r = datos_textura[text_idx],
+                                .g = datos_textura[text_idx + 1],
+                                .b = datos_textura[text_idx + 2],
+                                .a = datos_textura[text_idx + 3],
+                            };
 
-                        const color = rl.Color{
-                            .r = datos_textura[text_idx],
-                            .g = datos_textura[text_idx + 1],
-                            .b = datos_textura[text_idx + 2],
-                            .a = datos_textura[text_idx + 3],
-                        };
+                            framebuffer.draw_pixel(col_f32, @floatFromInt(y), color) catch continue;
+                        }
+                    }
 
-                        framebuffer.draw_pixel(col_f32, @floatFromInt(y), color) catch continue;
+                    // --- sprites (mechas) que este rayo tocó antes de llegar a la pared ---
+                    if (hit.sprite_hits) |hits| {
+                        const half_screen_height = height_f32 / 2.0;
+                        const projection_plane = (width_f32 / 2.0) / @tan(player.FOV / 2.0);
+
+                        var sprite_idx: usize = hits.len - 1;
+                        while (true) {
+                            const sprite_hit = hits[sprite_idx];
+                            const draw_height: f32 = half_screen_height / sprite_hit.distance * projection_plane;
+
+                            var bottom_flt = half_screen_height - draw_height / 2.0;
+                            if (bottom_flt < 0) bottom_flt = 0;
+                            if (bottom_flt > height_f32) bottom_flt = height_f32;
+                            const bottom: usize = @intFromFloat(bottom_flt);
+
+                            var top_flt = half_screen_height + draw_height / 2.0;
+                            if (top_flt < 0) top_flt = 0;
+                            if (top_flt > height_f32) top_flt = height_f32;
+                            const top: usize = @intFromFloat(top_flt);
+
+                            if (top > bottom) {
+                                const tex = sprite_hit.sprite.texture;
+                                const tex_width: usize = @intCast(tex.width);
+                                const tex_height: usize = @intCast(tex.height);
+                                var tex_data: []u8 = undefined;
+                                tex_data.ptr = @ptrCast(tex.data);
+                                tex_data.len = tex_width * tex_height * 4;
+
+                                const tex_x: usize = @min(
+                                    tex_width - 1,
+                                    @as(usize, @intFromFloat(sprite_hit.uvx * @as(f32, @floatFromInt(tex_width)))),
+                                );
+                                const strip_px = top - bottom;
+
+                                for (bottom..top) |y| {
+                                    const y_scaled = @min(tex_height - 1, ((y - bottom) * tex_height) / strip_px);
+                                    const text_idx = (y_scaled * tex_width + tex_x) * 4;
+                                    const alpha = tex_data[text_idx + 3];
+                                    if (alpha == 0) continue; // pixel transparente del sprite: no lo dibujamos
+
+                                    const color = rl.Color{
+                                        .r = tex_data[text_idx],
+                                        .g = tex_data[text_idx + 1],
+                                        .b = tex_data[text_idx + 2],
+                                        .a = alpha,
+                                    };
+                                    framebuffer.draw_pixel(col_f32, @floatFromInt(y), color) catch continue;
+                                }
+                            }
+
+                            if (sprite_idx == 0) break;
+                            sprite_idx -= 1;
+                        }
                     }
                 }
             },
@@ -190,6 +275,7 @@ fn textureIndexFor(wall_char: u8) usize {
         '-' => 0,
         '|' => 1,
         '+' => 2,
+        '0', '*' => 3,
         else => 0,
     };
 }
