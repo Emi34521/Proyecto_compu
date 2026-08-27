@@ -61,6 +61,7 @@ pub const Framebuffer = struct {
 
         self.texture = try rl.loadTextureFromImage(self.image);
         rl.drawTexture(self.texture.?, 0, 0, .white);
+        rl.drawFPS(1900 - 100, 20);
         //equivalente a
         // if (self.texture) |texture| {
         //     rl.drawTexture(texture, 0, 0, .white);

@@ -34,6 +34,14 @@ pub fn main(init: std.process.Init) !void {
     rl.initWindow(width, height, "proyectoXD");
     defer rl.closeWindow();
     rl.setTargetFPS(60);
+    // audio: se inicializa una sola vez, después de la ventana
+    rl.initAudioDevice();
+    defer rl.closeAudioDevice();
+
+    const music = try rl.loadMusicStream("src/resources/audio/song.wav");
+    defer rl.unloadMusicStream(music);
+    rl.setMusicVolume(music, 0.9);
+    rl.playMusicStream(music);
 
     //Básicamente se carga primero el mapa del juego y se imprime en consola.
     var mapa = try Map.Mapa.load_map(io, gpa, "src/resources/mapa.txt");
@@ -44,6 +52,17 @@ pub fn main(init: std.process.Init) !void {
     // como piso (' ') para que no cuenten como pared
     const mecha_positions = try mapa.extract_spawns(gpa, 'x', block_sz);
     defer gpa.free(mecha_positions);
+
+    // dimensiones del mapa en celdas (la fila más larga manda, por si alguna
+    // línea del .txt es más corta que las demás). No cambia durante el juego,
+    // así que se calcula una sola vez aquí en vez de cada frame.
+    var map_cols: usize = 0;
+    for (mapa.cells) |row| {
+        if (row.len > map_cols) map_cols = row.len;
+    }
+    const map_rows: usize = mapa.cells.len;
+    const map_cols_f32: f32 = @floatFromInt(map_cols);
+    const map_rows_f32: f32 = @floatFromInt(map_rows);
 
     var sprites = try gpa.alloc(spriteT.Sprite, mecha_positions.len);
     defer {
@@ -77,7 +96,7 @@ pub fn main(init: std.process.Init) !void {
         try rl.loadImage("src/resources/textures/wall1.png"),
         try rl.loadImage("src/resources/textures/wall2.png"),
         try rl.loadImage("src/resources/textures/wall3.png"),
-        try rl.loadImage("src/resources/textures/wall4.png"), // '0' y '*': secciones inaccesibles
+        try rl.loadImage("src/resources/textures/asosretroll.png"), // '0' y '*': secciones inaccesibles
     };
     //liberar la memoria
     defer for (wall_textures) |img| rl.unloadImage(img);
@@ -91,6 +110,7 @@ pub fn main(init: std.process.Init) !void {
             dt = dt_ms / 1000.0;
             framestart = now;
         }
+        rl.updateMusicStream(music);
         framebuffer.clear();
 
         // reseteamos la arena al inicio de cada frame: libera de un jalón
@@ -191,6 +211,9 @@ pub fn main(init: std.process.Init) !void {
                         while (true) {
                             const sprite_hit = hits[sprite_idx];
                             const sprite_size_f32: f32 = @floatFromInt(sprite_hit.sprite.size);
+                            // misma fórmula (y misma escala) que wall_height, pero con el
+                            // tamaño real del sprite en vez del tamaño del bloque de pared;
+                            // así ambos quedan directamente comparables en pantalla.
                             const draw_height: f32 = if (sprite_hit.distance > 1)
                                 (sprite_size_f32 * height_f32) / sprite_hit.distance
                             else
@@ -241,23 +264,47 @@ pub fn main(init: std.process.Init) !void {
                         }
                     }
                 }
+
+                // minimapa en la esquina superior izquierda
+                const minimap_box: f32 = 320; // ancho/alto máximo del minimapa en píxeles
+                const minimap_origin_x: usize = 15;
+                const minimap_origin_y: usize = 15;
+
+                const minimap_cell_f32 = @min(minimap_box / map_cols_f32, minimap_box / map_rows_f32);
+                const minimap_cell_px: usize = @intFromFloat(@max(1.0, minimap_cell_f32));
+
+                // fondo sólido detrás del minimapa: se dibuja del tamaño exacto
+                // del mapa ya escalado, y luego render() pinta encima las paredes;
+                // las celdas de piso (' ') se saltan en render(), así que quedan
+                // mostrando este fondo, en vez del contenido de la vista 3D.
+                framebuffer.set_current_color(.black);
+                artist.square(
+                    &framebuffer,
+                    @intCast(minimap_origin_x),
+                    @intCast(minimap_origin_y),
+                    minimap_cell_px * map_cols,
+                    minimap_cell_px * map_rows,
+                );
+
+                Map.Mapa.render(mapa, &framebuffer, minimap_cell_px, minimap_origin_x, minimap_origin_y);
+
+                // jugador, escalado a la misma proporción que el minimapa
+                const minimap_scale = @as(f32, @floatFromInt(minimap_cell_px)) / block_sz_f32;
+                const minimap_marker_x: i32 = @as(i32, @intCast(minimap_origin_x)) +
+                    @as(i32, @intFromFloat(player.position.x * minimap_scale));
+                const minimap_marker_y: i32 = @as(i32, @intCast(minimap_origin_y)) +
+                    @as(i32, @intFromFloat(player.position.y * minimap_scale));
+
+                framebuffer.set_current_color(.yellow);
+                artist.square(&framebuffer, minimap_marker_x - 2, minimap_marker_y - 2, 4, 4);
             },
             .top_down => {
-                // calculamos cuántas columnas/filas tiene el mapa (la fila
-                // más larga manda, por si alguna línea del .txt es más corta)
-                var map_cols: usize = 0;
-                for (mapa.cells) |row| {
-                    if (row.len > map_cols) map_cols = row.len;
-                }
-                const map_rows_f32: f32 = @floatFromInt(mapa.cells.len);
-                const map_cols_f32: f32 = @floatFromInt(map_cols);
-
                 // tamaño de celda para esta vista, para que el mapa ENTERO
                 // quepa en la pantalla (no el block_sz real del juego)
                 const cell_px_f32 = @min(width_f32 / map_cols_f32, height_f32 / map_rows_f32);
                 const cell_px: usize = @intFromFloat(@max(1.0, cell_px_f32));
 
-                Map.Mapa.render(mapa, &framebuffer, cell_px);
+                Map.Mapa.render(mapa, &framebuffer, cell_px, 0, 0);
 
                 // punto del jugador, escalado igual que el mapa: convertimos
                 // su posición real (en unidades de block_sz) a la escala del minimapa

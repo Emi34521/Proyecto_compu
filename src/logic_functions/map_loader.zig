@@ -43,11 +43,11 @@ pub const Mapa = struct {
         }
         gpa.free(self.cells);
     }
-    pub fn render(map: Mapa, target: *fr.Framebuffer, block_sz: usize) void {
+    pub fn render(map: Mapa, target: *fr.Framebuffer, block_sz: usize, origin_x: usize, origin_y: usize) void {
         for (map.cells, 0..) |row, row_idx| {
             for (row, 0..) |cell, col_idx| {
-                const x = col_idx * block_sz;
-                const y = row_idx * block_sz;
+                const x = origin_x + col_idx * block_sz;
+                const y = origin_y + row_idx * block_sz;
 
                 switch (cell) {
                     '+' => target.set_current_color(rl.Color.blue),
