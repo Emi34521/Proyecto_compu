@@ -186,12 +186,15 @@ pub fn main(init: std.process.Init) !void {
                     // --- sprites (mechas) que este rayo tocó antes de llegar a la pared ---
                     if (hit.sprite_hits) |hits| {
                         const half_screen_height = height_f32 / 2.0;
-                        const projection_plane = (width_f32 / 2.0) / @tan(player.FOV / 2.0);
 
                         var sprite_idx: usize = hits.len - 1;
                         while (true) {
                             const sprite_hit = hits[sprite_idx];
-                            const draw_height: f32 = half_screen_height / sprite_hit.distance * projection_plane;
+                            const sprite_size_f32: f32 = @floatFromInt(sprite_hit.sprite.size);
+                            const draw_height: f32 = if (sprite_hit.distance > 1)
+                                (sprite_size_f32 * height_f32) / sprite_hit.distance
+                            else
+                                height_f32;
 
                             var bottom_flt = half_screen_height - draw_height / 2.0;
                             if (bottom_flt < 0) bottom_flt = 0;

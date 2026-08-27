@@ -35,10 +35,6 @@ pub fn cast_ray(
     var sprite_hits: std.ArrayList(SpriteHit) = .empty;
     // sin defer .deinit(arena): asumiendo arena, se libera toda junta al final del frame
 
-    const hit_sprites = try arena.alloc(bool, sprites.len);
-    // sin defer arena.free(...): mismo motivo, asumiendo arena
-    @memset(hit_sprites, false);
-
     const block_sz: f32 = @floatFromInt(block_size);
     const max_distancia: f32 = 2000; // evita que el rayo busque para siempre si no hay pared
     const cos_a = @cos(angle);
@@ -83,27 +79,26 @@ pub fn cast_ray(
             img_off = if (dist_borde_vertical < dist_borde_horizontal) frac_y else frac_x;
             break;
         }
+    }
+    // --- sprites: proyección tipo billboard, calculada una sola vez por rayo ---
+    for (sprites) |sprite| {
+        const dx = sprite.position.x - player.position.x;
+        const dy = sprite.position.y - player.position.y;
 
-        // revisamos sprites en cada paso del rayo, antes de llegar a la pared
-        for (sprites, 0..) |sprite, idx| {
-            if (hit_sprites[idx]) continue;
+        const depth = dx * cos_a + dy * sin_a; // distancia proyectada a lo largo del rayo
+        if (depth <= 0 or depth >= d) continue; // detrás de la cámara, o tapado por una pared
 
-            const sprite_size_f32: f32 = @floatFromInt(sprite.size);
-            const half_sprite_size = sprite_size_f32 / 2;
+        const sprite_size_f32: f32 = @floatFromInt(sprite.size);
+        const half_sprite_size = sprite_size_f32 / 2;
 
-            const dx = sprite.position.x - world_x;
-            const dy = sprite.position.y - world_y;
-            const dist_to_sprite = @sqrt(dx * dx + dy * dy);
+        const perp = -dx * sin_a + dy * cos_a; // desplazamiento perpendicular, con signo
+        if (@abs(perp) >= half_sprite_size) continue; // el rayo no toca el plano del sprite
 
-            if (dist_to_sprite < half_sprite_size) {
-                hit_sprites[idx] = true;
-                try sprite_hits.append(arena, .{
-                    .sprite = sprite,
-                    .distance = distancia,
-                    .uvx = dist_to_sprite / sprite_size_f32,
-                });
-            }
-        }
+        try sprite_hits.append(arena, .{
+            .sprite = sprite,
+            .distance = depth,
+            .uvx = (perp + half_sprite_size) / sprite_size_f32,
+        });
     }
 
     return .{
