@@ -1,4 +1,4 @@
-//librerías y modulos utilizados
+//librerías y modulos utilizados en todo el proyecto
 const std = @import("std");
 const rl = @import("raylib");
 const ray = @import("logic_functions/ray_caster.zig");
@@ -9,47 +9,50 @@ const artist = @import("logic_functions/artist.zig");
 const spriteT = @import("logic_functions/sprite.zig");
 
 const Clock = std.Io.Clock.real;
-
+//tamaño de la pantalla y del bloque del mundo en primera persona.
 const width: i32 = 1900;
 const height: i32 = 1070;
 const block_sz: usize = 100;
-
+//enum para cambiar entre primera persona y down
 const ViewMode = enum { first_person, top_down };
-
+//main xd
 pub fn main(init: std.process.Init) !void {
-    // std.process.Init ya nos da un allocator y un io listos para usar,
-    // no hace falta armar uno manualmente.
+    //Los general propurse allocator
     const gpa = init.gpa;
     const io = init.io;
-
+    // variable para el tipo de estructura player. Es variable porque la posición siempre estará cambiando
     var player = playerI.Player{
-        .position = rl.Vector2{ .x = 150, .y = 150 },
+        .position = rl.Vector2{ .x = 150, .y = 150 }, //posición inicial
         .Angle = 0.0,
         .FOV = std.math.pi / 3.0, // Campo de visión de 60 grados
         .speed = 350.0,
         .rotation_speed = std.math.pi / 2.0, // Velocidad de rotación de 90 grados por segundo
     };
-
+    // iniciar framebuffer
     var framebuffer = fr.Framebuffer.init(width, height, .black);
     rl.initWindow(width, height, "proyectoXD");
-    defer rl.closeWindow();
+    defer rl.closeWindow(); //garantizar cerrar la ventana.
     rl.setTargetFPS(60);
-    // audio: se inicializa una sola vez, después de la ventana
+    // Para el audio se utiliza lo mismo de raylib para cargar el audio.
     rl.initAudioDevice();
-    defer rl.closeAudioDevice();
-
+    defer rl.closeAudioDevice(); //garantizar el cerrado
+    //cargar la música, es un try porque puede fallar.
     const music = try rl.loadMusicStream("src/resources/audio/song.wav");
-    defer rl.unloadMusicStream(music);
+    defer rl.unloadMusicStream(music); //cerrar la música
+    //Este comando es como una "configuración" de la música, como parámetro tiene el archivo de música y luego el
+    //volumen al que se estaría reproduciendo, en este caso al 0.9 de su volumen original.
     rl.setMusicVolume(music, 0.9);
+    //simplemente correr la música.
     rl.playMusicStream(music);
 
     //Básicamente se carga primero el mapa del juego y se imprime en consola.
     var mapa = try Map.Mapa.load_map(io, gpa, "src/resources/mapa.txt");
     defer mapa.deinit(gpa);
 
-    // sacamos las posiciones de las 'x' del mapa (spawns de mecha) y las
-    // convertimos en sprites reales; extract_spawns ya deja esas celdas
-    // como piso (' ') para que no cuenten como pared
+    // sacamos las posiciones de las 'x' del mapa que son los sprites y las
+    // convertimos en sprites reales con extract_spawns ya deja esas celdas
+    // como piso para que no cuenten como pared y no tengan coliciones.
+    //en este caso solo es una variable porque solo agregué un sprite.
     const mecha_positions = try mapa.extract_spawns(gpa, 'x', block_sz);
     defer gpa.free(mecha_positions);
 
@@ -145,7 +148,20 @@ pub fn main(init: std.process.Init) !void {
             player.position.x -= @cos(player.Angle) * player.speed * dt;
             player.position.y -= @sin(player.Angle) * player.speed * dt;
         }
+        if (rl.isGamepadAvailable(0)) {
+            // stick izquierdo mover adelante/atrás con el eje Y
+            const move = rl.getGamepadAxisMovement(0, .left_y);
+            if (@abs(move) > 0.2 and !mapa.isWall(player.position.x, player.position.y, block_sz)) {
+                player.position.x -= @cos(player.Angle) * player.speed * dt * move;
+                player.position.y -= @sin(player.Angle) * player.speed * dt * move;
+            }
 
+            // stick izquierdo eje X, o stick derecho, para rotar la cámara
+            const turn = rl.getGamepadAxisMovement(0, .right_x);
+            if (@abs(turn) > 0.2) {
+                player.Angle += player.rotation_speed * dt * turn;
+            }
+        }
         // isKeyPressed (no isKeyDown) para que cambie de vista UNA vez por
         // pulsación, no 60 veces por segundo mientras la tecla está abajo.
         if (rl.isKeyPressed(.k)) {
